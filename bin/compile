@@ -4,31 +4,63 @@
 # Ensure wildcards in globs match dotfiles too.
 shopt -s dotglob
 
+# Function to indent output
+indent() {
+  sed -u 's/^/       /'
+}
+
+# Variables
 BUILD_DIR=${1:-}
 CACHE_DIR=${2:-}
 ENV_DIR=${3:-}
+TEMP_DIR=$(mktemp -d "$CACHE_DIR/subdirXXXXX")
 
-if [ -f $ENV_DIR/PROJECT_PATH ]; then
-	PROJECT_PATH=`cat $ENV_DIR/PROJECT_PATH`
-	if [ -d $BUILD_DIR/$PROJECT_PATH ]; then
-		echo "-----> Subdir buildpack in $PROJECT_PATH"
-		echo "       creating cache: $CACHE_DIR"
-		mkdir -p $CACHE_DIR
-		TMP_DIR=`mktemp -d $CACHE_DIR/subdirXXXXX`
-		echo "       created tmp dir: $TMP_DIR"
-		echo "       moving working dir: $PROJECT_PATH to $TMP_DIR"
-		cp -R $BUILD_DIR/$PROJECT_PATH/. $TMP_DIR/
-	 	echo "       cleaning build dir $BUILD_DIR"
-		rm -rf $BUILD_DIR/*
-		echo "       copying preserved work dir from cache $TMP_DIR to build dir $BUILD_DIR"
-		cp -R $TMP_DIR/. $BUILD_DIR/
-		echo "       cleaning tmp dir $TMP_DIR"
-		rm -rf $TMP_DIR
-		exit 0
-	fi
+# Check if the build, cache, and environment directories are set
+if [ -z "$BUILD_DIR" ] || [ -z "$CACHE_DIR" ] || [ -z "$ENV_DIR" ]; then
+  echo "Error: Missing required arguments." >&2
+  exit 1
 fi
 
-echo "PROJECT_PATH is undefined"
-exit 1
+# Ensure cleanup on exit
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
+# Read PROJECT_PATH from the environment directory
+if [ -f "$ENV_DIR/PROJECT_PATH" ]; then
+  PROJECT_PATH=$(cat "$ENV_DIR/PROJECT_PATH")
+else
+  echo "Error: PROJECT_PATH is undefined." >&2
+  exit 1
+fi
 
+# Check if the PROJECT_PATH directory exists
+if [ -d "$BUILD_DIR/$PROJECT_PATH" ]; then
+  echo "-----> Subdir buildpack in $PROJECT_PATH"
+
+  # Move specified files to the temporary directory
+  echo "Moving specified files to temporary directory" | indent
+  for file in "package.json" "package-lock.json" "webpack.constants.js" "webpack.common.js" "webpack.config.dev.js" "webpack.config.prod.js"; do
+    if [ -f "$BUILD_DIR/$file" ]; then
+      mv "$BUILD_DIR/$file" "$TEMP_DIR"
+    else
+      echo "$file not found, skipping..." | indent
+    fi
+  done
+
+  # Move the contents of the PROJECT_PATH to the temporary directory
+  echo "Moving contents of $PROJECT_PATH to temporary directory" | indent
+  cp -R "$BUILD_DIR/$PROJECT_PATH/." "$TEMP_DIR/"
+
+  # Clear the root directory
+  echo "Flushing the root directory" | indent
+  rm -rf "$BUILD_DIR"/*
+
+  # Move the contents of the temporary directory back to the root directory
+  echo "Moving files from temporary directory back to root" | indent
+  cp -R "$TEMP_DIR/." "$BUILD_DIR/"
+
+  echo "-----> Custom buildpack script completed"
+  exit 0
+else
+  echo "Error: $PROJECT_PATH directory not found." >&2
+  exit 1
+fi
